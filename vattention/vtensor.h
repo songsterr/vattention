@@ -20,7 +20,12 @@ public:
 
     c10::DataPtr allocate(size_t size) override
     {
+        // Use the allocator's configured device index.
         c10::DeviceIndex device = this->device_idx;
+        
+        // Set the device context explicitly for this scope.
+        const c10::DeviceGuard device_guard(c10::Device(c10::kCUDA, device));
+        
         constexpr size_t one_exa_bytes = 1152921504606846976ULL;
         TORCH_CHECK_WITH(
             OutOfMemoryError,
@@ -30,7 +35,8 @@ public:
         if (size == 0)
             throw std::runtime_error("can't allocate 0 sized tensor...");
 
-        C10_CUDA_CHECK(c10::cuda::GetDevice(&device));
+        // This call is now guaranteed to be on the correct device.
+        // C10_CUDA_CHECK(c10::cuda::GetDevice(&device)); // Removed - we use our configured device
         CUdeviceptr ptr_gpu;
         if (!is_uvm_backend(this->page_size))
         {

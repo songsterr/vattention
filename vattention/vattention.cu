@@ -32,6 +32,8 @@ private:
     /* custom virtual tensor allocator */
     VirtualTensorAllocator *allocator;
     Log log;
+    /* pre-converted scalar type to avoid GIL issues */
+    at::ScalarType scalar_type;
 
 public:
     bool megacache_enabled;
@@ -114,10 +116,11 @@ public:
         max_batch_size = max_batch_size_;
         max_context_length = max_context_length_;
         device = device_;
-        dtype = dtype_;
         page_size = page_size_;
         megacache_enabled = megacache;
-        bytes_per_elem = dtype.attr("itemsize").cast<int>();
+        // Pre-convert dtype to scalar type to avoid GIL issues during async operations
+        scalar_type = torch::python::detail::py_object_to_dtype(dtype_);
+        bytes_per_elem = dtype_.attr("itemsize").cast<int>();
         init_kv_block_size();
         init_buffer_sizes();
         init_kvcache_batch_metadata();
@@ -141,14 +144,13 @@ public:
 
     at::Tensor alloc_virtual_tensor()
     {
-        at::ScalarType type_ = torch::python::detail::py_object_to_dtype(dtype);
         at::IntArrayRef shape;
         if (megacache_enabled)
             shape = {max_batch_size, max_context_length, num_layers, num_kv_heads, head_size};
         else
             shape = {max_batch_size, max_context_length, num_kv_heads, head_size};
 
-        at::Tensor t = alloc_vtensor(shape, page_size, type_, allocator, device);
+        at::Tensor t = alloc_vtensor(shape, page_size, scalar_type, allocator, device);
         return t;
     }
 

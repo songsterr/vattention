@@ -1,3 +1,5 @@
+#include <mutex>
+
 #define KB (1024UL)
 #define MB (1024 * KB)
 #define GB (1024 * MB)
@@ -40,13 +42,16 @@ std::vector<at::Tensor> v_tensors;
 // this synchronizes background daemons with API calls
 std::atomic<bool> mem_manager_running(false);
 
+// mutex to protect memory mapping operations from race conditions
+std::mutex memory_mapping_mutex;
+
 /* model specifc params */
 int num_kv_heads;
 int head_size;
 int num_layers;
 int bytes_per_elem;
 int device;
-py::object dtype;
+// Removed py::object dtype to avoid GIL issues - using pre-converted scalar_type instead
 
 /* framework specific params */
 int max_batch_size;

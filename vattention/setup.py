@@ -1,14 +1,19 @@
 import os
-from setuptools import setup, Extension
+from setuptools import Extension, setup
+import torch
 from torch.utils import cpp_extension
 
-libtorch_path = os.getenv('LIBTORCH_PATH', '/ramyapra/sarathi-env/libtorch')
-assert os.path.exists(libtorch_path), f'libtorch not found at {libtorch_path}'
+# Use dynamic PyTorch library detection for better compatibility
+include_dirs = cpp_extension.include_paths() + ['.']
+
+# Get library paths from torch
+library_dirs = cpp_extension.library_paths()
 
 setup(name='vattention',
       version='0.0.1',
       ext_modules=[cpp_extension.CUDAExtension('vattention', ['vattention.cu'],
-      include_dirs=[libtorch_path, os.path.join(libtorch_path, 'torch/csrc/api/include')],
+      include_dirs=include_dirs,
+      library_dirs=library_dirs,
       extra_link_args=['-lc10', '-lcuda', '-ltorch'])],
       cmdclass={'build_ext': cpp_extension.BuildExtension}
       )
