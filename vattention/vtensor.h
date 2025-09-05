@@ -121,7 +121,7 @@ TORCH_CUDA_CPP_API at::Tensor alloc_vtensor(
     int device_idx)
 {
     c10::optional<c10::MemoryFormat> memory_format_opt;
-    at::globalContext().lazyInitCUDA();
+    at::globalContext().lazyInitDevice(at::kCUDA);
     c10::Device device = c10::Device(c10::kCUDA, device_idx);
     TORCH_INTERNAL_ASSERT(device.is_cuda());
     const c10::DeviceGuard device_guard(device);
