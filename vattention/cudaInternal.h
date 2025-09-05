@@ -88,121 +88,23 @@ inline void map_cuda_pages(int reqId,
                         CUdeviceptr kcache_ptr,
                         CUdeviceptr vcache_ptr,
                         CUPage k_page,
-                        CUPage v_page) {
-    // Lock to prevent race conditions in multi-threaded memory mapping
-    std::lock_guard<std::mutex> lock(memory_mapping_mutex);
-    
-    // Memory mapping with race condition protection
-    
-    // Validate alignment - req_offset must be page_size aligned for cuMemMap
-    if (req_offset % page_size != 0) {
-        std::cerr << "[vAttention] Error: req_offset " << req_offset 
-                  << " is not aligned to page_size " << page_size << std::endl;
-        exit(1);
-    }
-    
-    // Validate memory handles are valid before mapping
-    if (k_page == 0 || v_page == 0) {
-        std::cerr << "[vAttention] Error: Invalid memory handle (k_page=" 
-                  << k_page << ", v_page=" << v_page << ")" << std::endl;
-        exit(1);
-    }
-    
-    // Validate virtual address ranges
-    if (kcache_ptr == 0 || vcache_ptr == 0) {
-        std::cerr << "[vAttention] Error: Invalid virtual address pointers" << std::endl;
-        exit(1);
-    }
-    
-    // Validate access descriptor is properly initialized
-    if (accessDesc.location.type != CU_MEM_LOCATION_TYPE_DEVICE || 
-        accessDesc.flags != CU_MEM_ACCESS_FLAGS_PROT_READWRITE) {
-        std::cerr << "[vAttention] Error: Access descriptor not properly initialized" << std::endl;
-        exit(1);
-    }
-    
-    // Check if this mapping already exists to prevent double mapping
-    auto mapping_key = std::make_tuple(reqId, req_offset, layer_idx);
-    if (cuda_pagemap.find(mapping_key) != cuda_pagemap.end()) {
-        return; // Already mapped, skip
-    }
-    
-    // Check if virtual address range is already mapped
-    CUresult map_result_k = cuMemMap(kcache_ptr + req_offset, page_size, 0, k_page, 0);
-    if (map_result_k != CUDA_SUCCESS) {
-        const char *errStr = NULL;
-        cuGetErrorString(map_result_k, &errStr);
-        std::cerr << "[vAttention] cuMemMap failed for k_page: " << errStr 
-                  << " (addr=" << std::hex << (kcache_ptr + req_offset) << std::dec << ")" << std::endl;
-        exit(1);
-    }
-    
-    CUresult map_result_v = cuMemMap(vcache_ptr + req_offset, page_size, 0, v_page, 0);
-    if (map_result_v != CUDA_SUCCESS) {
-        const char *errStr = NULL;
-        cuGetErrorString(map_result_v, &errStr);
-        std::cerr << "[vAttention] cuMemMap failed for v_page: " << errStr 
-                  << " (addr=" << std::hex << (vcache_ptr + req_offset) << std::dec << ")" << std::endl;
-        exit(1);
-    }
+            CUPage v_page)
+{
+    CHECK_CUDA(cuMemMap(kcache_ptr + req_offset, page_size, 0, k_page, 0));
+    CHECK_CUDA(cuMemMap(vcache_ptr + req_offset, page_size, 0, v_page, 0));
     CHECK_CUDA(cuMemSetAccess(kcache_ptr + req_offset, page_size, &accessDesc, 1));
     CHECK_CUDA(cuMemSetAccess(vcache_ptr + req_offset, page_size, &accessDesc, 1));
     cuda_pagemap[std::make_tuple(reqId, req_offset, layer_idx)] = std::make_pair(k_page, v_page);
 }
 
 void do_cuda_kvcache_cleanup() {
-    // First unmap all individual pages from the pagemap
-    for (auto& mapping : cuda_pagemap) {
-        auto [reqId, req_offset, layer_idx] = mapping.first;
-        auto [k_page, v_page] = mapping.second;
-        
-        // Find the corresponding virtual addresses
-        CUdeviceptr kcache_ptr = 0, vcache_ptr = 0;
-        if (layer_idx < k_tensors.size()) {
-            kcache_ptr = reinterpret_cast<CUdeviceptr>(k_tensors[layer_idx].data_ptr());
-            vcache_ptr = reinterpret_cast<CUdeviceptr>(v_tensors[layer_idx].data_ptr());
-            
-            // Safely unmap if addresses are valid
-            if (kcache_ptr != 0 && vcache_ptr != 0) {
-                CUresult result_k = cuMemUnmap(kcache_ptr + req_offset, page_size);
-                CUresult result_v = cuMemUnmap(vcache_ptr + req_offset, page_size);
-                // Don't exit on unmap failure during cleanup - just log
-                if (result_k != CUDA_SUCCESS || result_v != CUDA_SUCCESS) {
-                    std::cerr << "[vAttention] Warning: Failed to unmap some pages during cleanup" << std::endl;
-                }
-            }
-        }
-    }
-    cuda_pagemap.clear();
-    
-    // Then release virtual address spaces
     for (int i = 0; i < k_tensors.size(); i++) {
-        CUdeviceptr k_ptr = reinterpret_cast<CUdeviceptr>(k_tensors[i].data_ptr());
-        CUdeviceptr v_ptr = reinterpret_cast<CUdeviceptr>(v_tensors[i].data_ptr());
-        
-        if (k_ptr != 0) {
-            CUresult result = cuMemAddressFree(k_ptr, virt_buff_size);
-            if (result != CUDA_SUCCESS) {
-                std::cerr << "[vAttention] Warning: Failed to free k virtual address space" << std::endl;
+        CHECK_CUDA(cuMemUnmap(reinterpret_cast<CUdeviceptr>(k_tensors[i].data_ptr()), virt_buff_size));
+        CHECK_CUDA(cuMemUnmap(reinterpret_cast<CUdeviceptr>(v_tensors[i].data_ptr()), virt_buff_size));
+        CHECK_CUDA(cuMemAddressFree(reinterpret_cast<CUdeviceptr>(k_tensors[i].data_ptr()), virt_buff_size));
+        CHECK_CUDA(cuMemAddressFree(reinterpret_cast<CUdeviceptr>(v_tensors[i].data_ptr()), virt_buff_size));
             }
-        }
-        
-        if (v_ptr != 0) {
-            CUresult result = cuMemAddressFree(v_ptr, virt_buff_size);
-            if (result != CUDA_SUCCESS) {
-                std::cerr << "[vAttention] Warning: Failed to free v virtual address space" << std::endl;
-            }
-        }
-    }
 
-    // Finally release physical page handles
-    for(int i = 0; i < cuda_pages.size(); i++) {
-        CUresult result = cuMemRelease(cuda_pages[i]);
-        if (result != CUDA_SUCCESS) {
-            const char *errStr = NULL;
-            cuGetErrorString(result, &errStr);
-            std::cerr << "[vAttention] Warning: Failed to release page handle " << i 
-                      << ": " << errStr << std::endl;
-        }
-    }
+    for(int i = 0; i < cuda_pages.size(); i++)
+        CHECK_CUDA(cuMemRelease(cuda_pages[i]));
 }
